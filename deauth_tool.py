@@ -1,5 +1,14 @@
 #!/usr/bin/env python3
 
+"""
+WiFi Deauthentication Tool
+A command-line utility for Kali Linux designed for cybersecurity research and penetration testing.
+
+MIT License
+Copyright (c) 2024 WiFi Deauthentication Tool
+See LICENSE file for full license text.
+"""
+
 import argparse
 import sys
 import os
