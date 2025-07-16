@@ -280,6 +280,7 @@ class DeauthTool:
                     
                     # Parse networks
                     reading_networks = True
+                    networks_list = []  # Store networks in a list instead of dict
                     for line in lines:
                         line = line.strip()
                         
@@ -297,15 +298,20 @@ class DeauthTool:
                                     bssid = fields[0]
                                     
                                     if bssid and bssid != "BSSID":
-                                        self.networks[bssid] = {
+                                        network = {
+                                            'bssid': bssid,
                                             'ssid': fields[13].strip() or '[Hidden]',
                                             'channel': fields[3].strip() or '?',
                                             'signal': int(fields[8]) if fields[8].strip() else -100,
                                             'encryption': fields[5].strip() or 'Unknown',
                                             'clients': set()
                                         }
+                                        networks_list.append(network)
                             except Exception as e:
                                 continue
+                                
+                    # Sort networks by signal strength
+                    self.networks = sorted(networks_list, key=lambda x: x['signal'], reverse=True)
                                 
                     # Cleanup scan files
                     for f in os.listdir(scan_dir):
@@ -341,14 +347,12 @@ class DeauthTool:
         table.add_column("Signal", justify="center")
         table.add_column("Security", style="yellow")
 
-        for idx, (bssid, network) in enumerate(sorted(self.networks.items(), 
-                                                     key=lambda x: x[1]['signal'], 
-                                                     reverse=True), 1):
+        for idx, network in enumerate(self.networks, 1):
             signal_bars = self.get_signal_strength_bars(network['signal'])
             table.add_row(
                 str(idx),
                 network['ssid'],
-                bssid,
+                network['bssid'],
                 str(network['channel']),
                 f"{signal_bars} ({network['signal']} dBm)",
                 network['encryption']
@@ -362,8 +366,9 @@ class DeauthTool:
             try:
                 choice = int(self.console.input("[bold cyan]Select network number: [/bold cyan]"))
                 if 1 <= choice <= len(self.networks):
-                    self.bssid = list(self.networks.keys())[choice-1]
-                    self.network_info = self.networks[self.bssid]
+                    selected_network = self.networks[choice-1]
+                    self.bssid = selected_network['bssid']
+                    self.network_info = selected_network
                     return True
                 else:
                     self.console.print("[bold red]Invalid choice. Please try again.[/bold red]")
@@ -440,6 +445,7 @@ class DeauthTool:
                     
                     # Parse clients
                     reading_clients = False
+                    clients_list = []  # Store clients in a list to maintain order
                     for line in lines:
                         line = line.strip()
                         
@@ -455,13 +461,18 @@ class DeauthTool:
                                     
                                     if client_mac and client_mac != "Station MAC":
                                         power = fields[3].strip()
-                                        self.clients[client_mac] = {
+                                        client = {
+                                            'mac': client_mac,
                                             'type': self.get_device_type(client_mac),
                                             'signal': int(power) if power.strip('-').isdigit() else -100,
                                             'last_seen': time.time()
                                         }
+                                        clients_list.append(client)
                             except:
                                 continue
+                                
+                    # Sort clients by signal strength
+                    self.clients = sorted(clients_list, key=lambda x: x['signal'], reverse=True)
                                 
                     # Cleanup scan files
                     for f in os.listdir(scan_dir):
@@ -496,16 +507,14 @@ class DeauthTool:
         table.add_column("Last Seen", style="yellow")
 
         current_time = time.time()
-        for idx, (mac, client) in enumerate(sorted(self.clients.items(), 
-                                                 key=lambda x: x[1]['signal'],
-                                                 reverse=True), 1):
+        for idx, client in enumerate(self.clients, 1):
             signal_bars = self.get_signal_strength_bars(client['signal'])
             signal_str = f"{signal_bars} ({client['signal']} dBm)"
             last_seen = f"{int(current_time - client['last_seen'])}s ago"
             
             table.add_row(
                 str(idx),
-                mac,
+                client['mac'],
                 client['type'],
                 signal_str,
                 last_seen
@@ -522,7 +531,7 @@ class DeauthTool:
                     return True
                 choice = int(choice)
                 if 1 <= choice <= len(self.clients):
-                    self.client = list(self.clients.keys())[choice-1]
+                    self.client = self.clients[choice-1]['mac']
                     return True
                 else:
                     self.console.print("[bold red]Invalid choice. Please try again.[/bold red]")
@@ -574,10 +583,14 @@ class DeauthTool:
         attack_info.add_column("Property", style="cyan")
         attack_info.add_column("Value", style="green")
         
-        attack_info.add_row("Target Network", self.networks[self.bssid]['ssid'])
+        attack_info.add_row("Target Network", self.network_info['ssid'])
         attack_info.add_row("BSSID", self.bssid)
         if self.client:
-            attack_info.add_row("Target Client", f"{self.client} ({self.clients[self.client]})")
+            client_info = next((client for client in self.clients if client['mac'] == self.client), None)
+            if client_info:
+                attack_info.add_row("Target Client", f"{self.client} ({client_info['type']})")
+            else:
+                attack_info.add_row("Target Client", self.client)
         else:
             attack_info.add_row("Target", "All Clients")
             
