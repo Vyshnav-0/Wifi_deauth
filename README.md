@@ -1,6 +1,8 @@
 # WiFi Deauthentication Tool 🛡️
 
-A command-line utility for Kali Linux designed for cybersecurity research and penetration testing. This tool allows security professionals to test network security by simulating WiFi deauthentication attacks.
+A professional command-line utility for Kali Linux designed for cybersecurity research and penetration testing. This tool features a modern, user-friendly interface with real-time feedback and progress monitoring.
+
+![Tool Banner](https://raw.githubusercontent.com/yourusername/wifi-deauth-tool/main/screenshots/banner.png)
 
 ## ⚠️ Legal Disclaimer
 
@@ -11,13 +13,36 @@ A command-line utility for Kali Linux designed for cybersecurity research and pe
 
 ## ✨ Features
 
-- 🔍 Interactive mode with guided interface selection
-- 📡 Automatic wireless interface detection
-- 🌐 Network scanning with signal strength
+### Modern Interface
+- 🎨 Professional ASCII art banner
+- 📊 Real-time progress bars and spinners
+- 📋 Formatted tables for network and client information
+- 🔄 Live attack statistics
+- 🎯 Interactive menus with color coding
+
+### Core Functionality
+- 🔍 Automatic wireless interface detection
+- 📡 Network scanning with signal strength
 - 👥 Client detection with device type identification
-- 📊 Real-time attack monitoring
+- ⚡ Deauthentication attack capabilities
 - 📝 Detailed logging system
-- 🎨 Colorized output for better readability
+
+### Smart Features
+- 🔍 Automatic virtual environment management
+- 📱 Device type detection (Apple, Android, Windows)
+- 📊 Real-time packet statistics
+- 🛡️ Automatic cleanup and restoration
+
+## 🖼️ Screenshots
+
+### Network Scanning
+![Network Scan](https://raw.githubusercontent.com/yourusername/wifi-deauth-tool/main/screenshots/network_scan.png)
+
+### Client Detection
+![Client Detection](https://raw.githubusercontent.com/yourusername/wifi-deauth-tool/main/screenshots/client_detection.png)
+
+### Attack Progress
+![Attack Progress](https://raw.githubusercontent.com/yourusername/wifi-deauth-tool/main/screenshots/attack_progress.png)
 
 ## 🔧 Prerequisites
 
@@ -34,86 +59,70 @@ git clone [repository-url]
 cd wifi-deauth-tool
 ```
 
-2. Install dependencies:
+2. Run the tool:
 ```bash
-pip install -r requirements.txt
+sudo python3 deauth_tool.py
 ```
 
-3. Ensure your wireless card supports monitor mode:
-```bash
-sudo airmon-ng
-```
+The tool will automatically:
+- Create a virtual environment if needed
+- Install required dependencies
+- Launch in the virtual environment
 
 ## 🚀 Usage
 
-### Interactive Mode (Recommended)
+The tool features an intuitive, interactive interface. Simply follow the on-screen prompts:
 
-Run the tool in interactive mode for a guided experience:
-```bash
-sudo python3 deauth_tool.py --interactive
+1. **Interface Selection**
+   - View available wireless interfaces
+   - Select interface by number
+   - Automatic monitor mode configuration
+
+2. **Network Scanning**
+   - Real-time network discovery
+   - View signal strength and channels
+   - Select target network from list
+
+3. **Client Detection**
+   - Automatic client discovery
+   - Device type identification
+   - Select specific client or target all
+
+4. **Attack Execution**
+   - Real-time packet statistics
+   - Live rate calculation
+   - Progress monitoring
+
+## 📊 Interface Features
+
+### Network List Display
+```
+┌─ Discovered Networks ──────────────────────────────────────┐
+│ No. │ BSSID             │ Channel │ Signal │ SSID         │
+├─────┼──────────────────┼─────────┼────────┼──────────────┤
+│  1  │ XX:XX:XX:XX:XX:XX│   1     │  -67   │ Network1     │
+│  2  │ YY:YY:YY:YY:YY:YY│   6     │  -72   │ Network2     │
+└─────┴──────────────────┴─────────┴────────┴──────────────┘
 ```
 
-The interactive mode will:
-1. Show available wireless interfaces
-2. Enable monitor mode automatically
-3. Scan and display nearby networks
-4. Scan for clients on selected network
-5. Allow targeting specific client or all clients
-6. Provide real-time attack feedback
-
-### Command-Line Mode
-
-Basic network scanning:
-```bash
-sudo python3 deauth_tool.py --interface wlan0 --scan
+### Client List Display
+```
+┌─ Connected Clients ───────────────────────────────────────┐
+│ No. │ Client MAC         │ Device Type                    │
+├─────┼──────────────────┼────────────────────────────────┤
+│  1  │ AA:AA:AA:AA:AA:AA│ 📱 Apple Device                │
+│  2  │ BB:BB:BB:BB:BB:BB│ 🤖 Android Device              │
+└─────┴──────────────────┴────────────────────────────────┘
 ```
 
-Attack specific client:
-```bash
-sudo python3 deauth_tool.py --interface wlan0 --bssid XX:XX:XX:XX:XX:XX --client YY:YY:YY:YY:YY:YY --packets 100
+### Attack Progress Display
 ```
-
-### Command Line Options
-
-- `--interactive`, `-i`: Start interactive mode
-- `--interface`: Wireless interface to use (e.g., wlan0)
-- `--scan`, `-s`: Scan for networks
-- `--bssid`, `-b`: Target access point MAC address
-- `--client`, `-c`: Target client MAC address (optional)
-- `--packets`, `-p`: Number of deauth packets to send (default: 50)
-- `--interval`: Interval between packets in seconds (default: 0.1)
-
-## 📝 Features in Detail
-
-### Network Scanning
-- Lists all nearby WiFi networks
-- Shows BSSID (MAC address)
-- Displays channel number
-- Shows signal strength
-- Identifies hidden SSIDs
-
-### Client Detection
-- Scans for connected clients
-- Attempts to identify device types:
-  - Apple devices
-  - Android devices
-  - Windows devices
-  - Other/Unknown devices
-- Shows real-time client discovery
-
-### Attack Modes
-- Target specific client
-- Target all clients on network
-- Customizable packet count
-- Adjustable packet interval
-- Automatic cleanup after attack
-
-### Monitoring
-- Real-time attack progress
-- Packet sending confirmation
-- Signal strength monitoring
-- Detailed logging to file
-- Color-coded status messages
+┌─ Attack Information ───────────────────────────────────────┐
+│ Packets Sent: 1337                                         │
+│ Time Elapsed: 42.5s                                        │
+│ Rate: 31.5 packets/s                                       │
+└──────────────────────────────────────────────────────────┘
+```
 
 ## 🛡️ Defense Against Deauth Attacks
 
@@ -143,6 +152,10 @@ Common issues and solutions:
    - Check antenna connection
    - Try different channel ranges
 
+4. **Virtual Environment Issues**
+   - Delete the `venv` directory
+   - Rerun the tool to create a new environment
+
 ## 🤝 Contributing
 
 Contributions are welcome! Please read our contributing guidelines before submitting pull requests.
@@ -168,11 +181,13 @@ Copyright (c) 2024 WiFi Deauthentication Tool
 - [802.11 Security](https://www.wi-fi.org/discover-wi-fi/security)
 - [Aircrack-ng Documentation](https://www.aircrack-ng.org/documentation.html)
 - [Scapy Documentation](https://scapy.readthedocs.io/)
+- [Rich Documentation](https://rich.readthedocs.io/)
 
 ## 🙏 Acknowledgments
 
 - Scapy project for packet manipulation
 - Aircrack-ng suite for wireless tools
+- Rich library for the beautiful interface
 - Kali Linux team
 - Open source community
 
