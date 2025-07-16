@@ -17,6 +17,21 @@ import venv
 from pathlib import Path
 from datetime import datetime
 
+# Import all required packages at module level
+try:
+    import netifaces
+    from scapy.all import *
+    from scapy.layers.dot11 import Dot11, Dot11Deauth, RadioTap, Dot11Beacon, Dot11Elt
+    from rich.console import Console
+    from rich.table import Table
+    from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeElapsedColumn
+    from rich.panel import Panel
+    from rich.live import Live
+    from rich.layout import Layout
+except ImportError:
+    # These imports failed, but we'll handle it in check_dependencies()
+    pass
+
 class SetupManager:
     def __init__(self):
         self.venv_path = Path("venv")
@@ -84,14 +99,14 @@ def check_dependencies():
     """Check if all required packages are installed"""
     try:
         import netifaces
-        from scapy.all import *
-        from scapy.layers.dot11 import Dot11, Dot11Deauth, RadioTap, Dot11Beacon, Dot11Elt
-        from rich.console import Console
-        from rich.table import Table
-        from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeElapsedColumn
-        from rich.panel import Panel
-        from rich.live import Live
-        from rich.layout import Layout
+        import scapy.all
+        import scapy.layers.dot11
+        import rich.console
+        import rich.table
+        import rich.progress
+        import rich.panel
+        import rich.live
+        import rich.layout
         return True
     except ImportError as e:
         return False
@@ -107,17 +122,6 @@ def check_venv():
 
 # Check virtual environment and dependencies before proceeding
 check_venv()
-
-# Now import required packages
-import netifaces
-from scapy.all import *
-from scapy.layers.dot11 import Dot11, Dot11Deauth, RadioTap, Dot11Beacon, Dot11Elt
-from rich.console import Console
-from rich.table import Table
-from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeElapsedColumn
-from rich.panel import Panel
-from rich.live import Live
-from rich.layout import Layout
 
 # Initialize rich console
 console = Console()
