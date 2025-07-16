@@ -11,7 +11,6 @@ Copyright (c) 2024 WiFi Deauthentication Tool
 import os
 import sys
 import time
-import glob
 import logging
 import subprocess
 import venv
@@ -260,55 +259,64 @@ class DeauthTool:
             scan_task = progress.add_task("[cyan]Running network discovery...", total=None)
             
             try:
-                # Run airodump-ng to scan for networks
-                cmd = f"airodump-ng {self.interface} --output-format csv --write /tmp/wifi_scan --write-interval 1"
-                process = subprocess.Popen(cmd.split(), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                # Run iwlist scan
+                cmd = f"iwlist {self.interface} scan"
+                output = subprocess.check_output(cmd.split(), stderr=subprocess.STDOUT).decode()
                 
-                # Let it run for 10 seconds
-                time.sleep(10)
-                process.terminate()
-                
-                # Read the CSV file
-                csv_file = "/tmp/wifi_scan-01.csv"
-                if os.path.exists(csv_file):
-                    with open(csv_file, 'r') as f:
-                        lines = f.readlines()
+                # Parse the output
+                current_cell = {}
+                for line in output.split('\n'):
+                    line = line.strip()
                     
-                    # Parse networks
-                    networks_section = True
-                    for line in lines:
-                        line = line.strip()
-                        if line == "":
-                            networks_section = False
-                            continue
-                            
-                        if networks_section and "BSSID" not in line:
-                            try:
-                                parts = line.split(',')
-                                bssid = parts[0].strip()
-                                channel = parts[3].strip()
-                                signal = parts[8].strip()
-                                encryption = parts[5].strip()
-                                ssid = parts[13].strip()
-                                
-                                if bssid and bssid != "BSSID":
-                                    self.networks[bssid] = {
-                                        'ssid': ssid if ssid else "[Hidden]",
-                                        'channel': channel,
-                                        'signal': int(signal) if signal.isdigit() else -100,
-                                        'encryption': encryption,
-                                        'clients': set()
-                                    }
-                            except:
-                                continue
-                                
-                    # Cleanup temporary files
-                    temp_files = glob.glob("/tmp/wifi_scan*")
-                    for f in temp_files:
+                    if line.startswith('Cell '):
+                        if current_cell and 'bssid' in current_cell:
+                            self.networks[current_cell['bssid']] = {
+                                'ssid': current_cell.get('ssid', '[Hidden]'),
+                                'channel': current_cell.get('channel', '?'),
+                                'signal': current_cell.get('signal', -100),
+                                'encryption': current_cell.get('encryption', 'Unknown'),
+                                'clients': set()
+                            }
+                        current_cell = {}
+                        current_cell['bssid'] = line.split('Address: ')[1]
+                    
+                    elif line.startswith('Channel:'):
+                        current_cell['channel'] = line.split(':')[1].strip()
+                    
+                    elif line.startswith('ESSID:'):
+                        ssid = line.split(':')[1].strip('"')
+                        current_cell['ssid'] = ssid if ssid else '[Hidden]'
+                    
+                    elif line.startswith('Quality'):
                         try:
-                            os.remove(f)
+                            signal = line.split('Signal level=')[1].split(' ')[0]
+                            if signal.endswith('dBm'):
+                                current_cell['signal'] = int(signal[:-3])
+                            else:
+                                current_cell['signal'] = int(signal)
                         except:
-                            pass
+                            current_cell['signal'] = -100
+                    
+                    elif line.startswith('Encryption key:'):
+                        if 'on' in line.lower():
+                            if 'IE: WPA2' in output:
+                                current_cell['encryption'] = 'WPA2'
+                            elif 'IE: WPA' in output:
+                                current_cell['encryption'] = 'WPA'
+                            else:
+                                current_cell['encryption'] = 'WEP'
+                        else:
+                            current_cell['encryption'] = 'Open'
+                
+                # Add the last cell if exists
+                if current_cell and 'bssid' in current_cell:
+                    self.networks[current_cell['bssid']] = {
+                        'ssid': current_cell.get('ssid', '[Hidden]'),
+                        'channel': current_cell.get('channel', '?'),
+                        'signal': current_cell.get('signal', -100),
+                        'encryption': current_cell.get('encryption', 'Unknown'),
+                        'clients': set()
+                    }
                             
             except Exception as e:
                 self.console.print(f"[bold red]Error during scanning: {str(e)}[/bold red]")
@@ -410,50 +418,23 @@ class DeauthTool:
             scan_task = progress.add_task("[cyan]Scanning for clients...", total=None)
             
             try:
-                # Run airodump-ng focused on target network
-                cmd = f"airodump-ng {self.interface} --bssid {self.bssid} --channel {self.network_info['channel']} --output-format csv --write /tmp/client_scan --write-interval 1"
-                process = subprocess.Popen(cmd.split(), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                # Use tcpdump to capture packets for 15 seconds
+                cmd = f"timeout 15 tcpdump -i {self.interface} -e -s 256 type mgt subtype probe-req or subtype probe-resp or subtype assoc-req or subtype assoc-resp"
+                output = subprocess.check_output(cmd.split(), stderr=subprocess.DEVNULL).decode()
                 
-                # Let it run for 15 seconds
-                time.sleep(15)
-                process.terminate()
-                
-                # Read the CSV file
-                csv_file = "/tmp/client_scan-01.csv"
-                if os.path.exists(csv_file):
-                    with open(csv_file, 'r') as f:
-                        lines = f.readlines()
-                    
-                    # Parse clients
-                    clients_section = False
-                    for line in lines:
-                        line = line.strip()
-                        if "Station MAC" in line:
-                            clients_section = True
-                            continue
-                            
-                        if clients_section and line:
-                            try:
-                                parts = line.split(',')
-                                client_mac = parts[0].strip()
-                                
-                                if client_mac and client_mac != "Station MAC":
-                                    signal = parts[3].strip()
+                # Parse tcpdump output for client MACs
+                for line in output.split('\n'):
+                    if self.bssid.lower() in line.lower():
+                        parts = line.split()
+                        for part in parts:
+                            if ':' in part and len(part) == 17:  # MAC address format
+                                client_mac = part.lower()
+                                if client_mac != self.bssid.lower():
                                     self.clients[client_mac] = {
                                         'type': self.get_device_type(client_mac),
-                                        'signal': int(signal) if signal.isdigit() else None,
+                                        'signal': -50,  # Default value since tcpdump doesn't provide signal strength
                                         'last_seen': time.time()
                                     }
-                            except:
-                                continue
-                                
-                    # Cleanup temporary files
-                    temp_files = glob.glob("/tmp/client_scan*")
-                    for f in temp_files:
-                        try:
-                            os.remove(f)
-                        except:
-                            pass
                             
             except Exception as e:
                 self.console.print(f"[bold red]Error during client scanning: {str(e)}[/bold red]")
@@ -473,21 +454,18 @@ class DeauthTool:
         table.add_column("No.", style="cyan", justify="right")
         table.add_column("Client MAC", style="green")
         table.add_column("Device Type", style="blue")
-        table.add_column("Signal", justify="center")
         table.add_column("Last Seen", style="yellow")
 
         current_time = time.time()
         for idx, (mac, client) in enumerate(sorted(self.clients.items(), 
-                                                 key=lambda x: x[1]['signal'] if x[1]['signal'] is not None else -100, 
+                                                 key=lambda x: x[1]['last_seen'],
                                                  reverse=True), 1):
-            signal_str = f"{self.get_signal_strength_bars(client['signal'])} ({client['signal']} dBm)" if client['signal'] is not None else "N/A"
             last_seen = f"{int(current_time - client['last_seen'])}s ago"
             
             table.add_row(
                 str(idx),
                 mac,
                 client['type'],
-                signal_str,
                 last_seen
             )
 
