@@ -11,12 +11,12 @@ Copyright (c) 2024 WiFi Deauthentication Tool
 import os
 import sys
 import time
+import glob
 import logging
 import subprocess
 import venv
 from pathlib import Path
 from datetime import datetime
-import glob
 
 # Import all required packages at module level
 try:
@@ -138,6 +138,7 @@ class DeauthTool:
         self.monitor_mode = False
         self.networks = {}
         self.clients = {}
+        self.network_info = None
         self.console = Console()
         
         # Create layout
@@ -160,6 +161,27 @@ class DeauthTool:
         """
         self.console.print(Panel(banner, style="bold blue"))
         self.console.print(Panel("🛡️  [bold red]For Educational and Authorized Testing Only[/bold red]", style="red"))
+
+    def get_user_agreement(self):
+        """Get user agreement and check root privileges"""
+        try:
+            # Check root privileges
+            if os.geteuid() != 0:
+                self.console.print("[bold red]❌ This script must be run as root[/bold red]")
+                return False
+            
+            # Show disclaimer
+            response = self.console.input("\n[bold red]⚠  This tool is for authorized testing only. Do you agree? (yes/no): [/bold red]")
+            
+            if response.lower() != 'yes':
+                self.console.print("\n[yellow]Aborted by user.[/yellow]")
+                return False
+                
+            return True
+            
+        except Exception as e:
+            self.console.print(f"[bold red]Error getting user agreement: {str(e)}[/bold red]")
+            return False
 
     def get_wireless_interfaces(self):
         """Get list of wireless interfaces"""
@@ -575,32 +597,40 @@ class DeauthTool:
                     self.console.print(f"[bold red]❌ Error during cleanup: {e}[/bold red]")
 
     def start(self):
-        """Start the tool"""
+        """Start the deauth tool"""
         try:
-            # Check root privileges
-            if os.geteuid() != 0:
-                self.console.print("[bold red]❌ This script must be run as root[/bold red]")
-                sys.exit(1)
-            
-            # Show banner and disclaimer
+            # Show banner
             self.show_banner()
             
-            # Show disclaimer
-            response = self.console.input("\n[bold red]⚠️  This tool is for authorized testing only. Do you agree? (yes/no): [/bold red]")
+            # Get user agreement
+            if not self.get_user_agreement():
+                return
             
-            if response.lower() != 'yes':
-                self.console.print("\n[yellow]Aborted by user.[/yellow]")
-                sys.exit(0)
-            
-            # Start interactive session
+            # Select interface
             self.select_interface()
+            
+            # Enable monitor mode
             self.enable_monitor_mode()
-            self.scan_networks()
-            if self.scan_clients():
-                self.perform_deauth()
+            
+            # Scan networks
+            if not self.scan_networks():
+                self.cleanup()
+                return
+            
+            # If we have a valid network selected, scan for clients
+            if self.network_info:
+                if not self.scan_clients():
+                    self.cleanup()
+                    return
                 
+                # If we have clients, perform deauth
+                if self.clients:
+                    self.perform_deauth()
+            
         except KeyboardInterrupt:
-            self.console.print("\n[bold yellow]⚠️  Session interrupted by user[/bold yellow]")
+            self.console.print("\n[bold yellow]⚠  Attack interrupted by user[/bold yellow]")
+        except Exception as e:
+            self.console.print(f"\n[bold red]❌ Error: {str(e)}[/bold red]")
         finally:
             self.cleanup()
 
