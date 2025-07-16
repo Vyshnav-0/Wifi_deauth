@@ -259,95 +259,68 @@ class DeauthTool:
             scan_task = progress.add_task("[cyan]Running network discovery...", total=None)
             
             try:
-                # First try to bring the interface up
-                try:
-                    subprocess.run(['ip', 'link', 'set', self.interface, 'up'], 
-                                 stdout=subprocess.DEVNULL, 
-                                 stderr=subprocess.DEVNULL)
-                except:
-                    pass
+                # Create a temporary directory for scan results
+                scan_dir = "/tmp/wifi_scan"
+                os.makedirs(scan_dir, exist_ok=True)
+                output_file = os.path.join(scan_dir, "scan")
 
-                # Run iw scan
-                try:
-                    cmd = f"iw dev {self.interface} scan"
-                    output = subprocess.check_output(cmd.split(), stderr=subprocess.STDOUT).decode()
-                except subprocess.CalledProcessError as e:
-                    if "Network is down" in str(e.output):
-                        self.console.print("[bold yellow]⚠️  Interface is down. Trying to bring it up...[/bold yellow]")
-                        subprocess.run(['ip', 'link', 'set', self.interface, 'up'], 
-                                    stdout=subprocess.DEVNULL, 
-                                    stderr=subprocess.DEVNULL)
-                        time.sleep(1)
-                        output = subprocess.check_output(cmd.split(), stderr=subprocess.STDOUT).decode()
-                    else:
-                        raise e
-
-                # Parse the output
-                current_cell = {}
-                for line in output.split('\n'):
-                    line = line.strip()
-                    
-                    if line.startswith('BSS '):
-                        if current_cell and 'bssid' in current_cell:
-                            self.networks[current_cell['bssid']] = {
-                                'ssid': current_cell.get('ssid', '[Hidden]'),
-                                'channel': current_cell.get('channel', '?'),
-                                'signal': current_cell.get('signal', -100),
-                                'encryption': current_cell.get('encryption', 'Unknown'),
-                                'clients': set()
-                            }
-                        current_cell = {}
-                        current_cell['bssid'] = line.split('BSS ')[1].split('(')[0].strip()
-                    
-                    elif 'freq: ' in line:
-                        # Convert frequency to channel
-                        try:
-                            freq = int(line.split('freq: ')[1])
-                            if 2412 <= freq <= 2484:
-                                channel = (freq - 2412) // 5 + 1
-                            elif 5170 <= freq <= 5825:
-                                channel = (freq - 5170) // 5 + 34
-                            else:
-                                channel = '?'
-                            current_cell['channel'] = str(channel)
-                        except:
-                            current_cell['channel'] = '?'
-                    
-                    elif 'SSID: ' in line:
-                        ssid = line.split('SSID: ')[1]
-                        current_cell['ssid'] = ssid if ssid else '[Hidden]'
-                    
-                    elif 'signal: ' in line:
-                        try:
-                            signal = float(line.split('signal: ')[1].split(' ')[0])
-                            current_cell['signal'] = int(signal)
-                        except:
-                            current_cell['signal'] = -100
-                    
-                    elif 'capability: ' in line:
-                        if 'Privacy' in line:
-                            if 'RSN' in output:
-                                current_cell['encryption'] = 'WPA2'
-                            elif 'WPA' in output:
-                                current_cell['encryption'] = 'WPA'
-                            else:
-                                current_cell['encryption'] = 'WEP'
-                        else:
-                            current_cell['encryption'] = 'Open'
+                # Start airodump-ng in background
+                cmd = f"airodump-ng -w {output_file} --output-format csv {self.interface}"
+                process = subprocess.Popen(cmd.split(), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 
-                # Add the last cell if exists
-                if current_cell and 'bssid' in current_cell:
-                    self.networks[current_cell['bssid']] = {
-                        'ssid': current_cell.get('ssid', '[Hidden]'),
-                        'channel': current_cell.get('channel', '?'),
-                        'signal': current_cell.get('signal', -100),
-                        'encryption': current_cell.get('encryption', 'Unknown'),
-                        'clients': set()
-                    }
+                # Let it run for 10 seconds
+                time.sleep(10)
+                process.terminate()
+                
+                # Read the CSV file
+                csv_file = f"{output_file}-01.csv"
+                if os.path.exists(csv_file):
+                    with open(csv_file, 'r', encoding='utf-8', errors='ignore') as f:
+                        lines = f.readlines()
+                    
+                    # Parse networks
+                    reading_networks = True
+                    for line in lines:
+                        line = line.strip()
+                        
+                        # Skip empty lines and headers
+                        if not line or "BSSID" in line or "Station MAC" in line:
+                            if "Station MAC" in line:
+                                reading_networks = False
+                            continue
+                        
+                        if reading_networks:
+                            try:
+                                # Split CSV line and handle empty fields
+                                fields = [field.strip() for field in line.split(',')]
+                                if len(fields) >= 14:  # Ensure we have enough fields
+                                    bssid = fields[0]
+                                    
+                                    if bssid and bssid != "BSSID":
+                                        self.networks[bssid] = {
+                                            'ssid': fields[13].strip() or '[Hidden]',
+                                            'channel': fields[3].strip() or '?',
+                                            'signal': int(fields[8]) if fields[8].strip() else -100,
+                                            'encryption': fields[5].strip() or 'Unknown',
+                                            'clients': set()
+                                        }
+                            except Exception as e:
+                                continue
+                                
+                    # Cleanup scan files
+                    for f in os.listdir(scan_dir):
+                        try:
+                            os.remove(os.path.join(scan_dir, f))
+                        except:
+                            pass
+                    try:
+                        os.rmdir(scan_dir)
+                    except:
+                        pass
                             
             except Exception as e:
                 self.console.print(f"[bold red]Error during scanning: {str(e)}[/bold red]")
-                self.console.print("[bold yellow]⚠️  Make sure you have root privileges and the interface is in monitor mode.[/bold yellow]")
+                self.console.print("[bold yellow]⚠️  Make sure you have root privileges and aircrack-ng is installed.[/bold yellow]")
                 return False
 
         if not self.networks:
@@ -446,23 +419,60 @@ class DeauthTool:
             scan_task = progress.add_task("[cyan]Scanning for clients...", total=None)
             
             try:
-                # Use tcpdump to capture packets for 15 seconds
-                cmd = f"timeout 15 tcpdump -i {self.interface} -e -s 256 type mgt subtype probe-req or subtype probe-resp or subtype assoc-req or subtype assoc-resp"
-                output = subprocess.check_output(cmd.split(), stderr=subprocess.DEVNULL).decode()
+                # Create a temporary directory for scan results
+                scan_dir = "/tmp/client_scan"
+                os.makedirs(scan_dir, exist_ok=True)
+                output_file = os.path.join(scan_dir, "scan")
+
+                # Start airodump-ng focused on target network
+                cmd = f"airodump-ng -w {output_file} --output-format csv --bssid {self.bssid} --channel {self.network_info['channel']} {self.interface}"
+                process = subprocess.Popen(cmd.split(), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 
-                # Parse tcpdump output for client MACs
-                for line in output.split('\n'):
-                    if self.bssid.lower() in line.lower():
-                        parts = line.split()
-                        for part in parts:
-                            if ':' in part and len(part) == 17:  # MAC address format
-                                client_mac = part.lower()
-                                if client_mac != self.bssid.lower():
-                                    self.clients[client_mac] = {
-                                        'type': self.get_device_type(client_mac),
-                                        'signal': -50,  # Default value since tcpdump doesn't provide signal strength
-                                        'last_seen': time.time()
-                                    }
+                # Let it run for 15 seconds
+                time.sleep(15)
+                process.terminate()
+                
+                # Read the CSV file
+                csv_file = f"{output_file}-01.csv"
+                if os.path.exists(csv_file):
+                    with open(csv_file, 'r', encoding='utf-8', errors='ignore') as f:
+                        lines = f.readlines()
+                    
+                    # Parse clients
+                    reading_clients = False
+                    for line in lines:
+                        line = line.strip()
+                        
+                        if "Station MAC" in line:
+                            reading_clients = True
+                            continue
+                            
+                        if reading_clients and line:
+                            try:
+                                fields = [field.strip() for field in line.split(',')]
+                                if len(fields) >= 6:  # Ensure we have enough fields
+                                    client_mac = fields[0]
+                                    
+                                    if client_mac and client_mac != "Station MAC":
+                                        power = fields[3].strip()
+                                        self.clients[client_mac] = {
+                                            'type': self.get_device_type(client_mac),
+                                            'signal': int(power) if power.strip('-').isdigit() else -100,
+                                            'last_seen': time.time()
+                                        }
+                            except:
+                                continue
+                                
+                    # Cleanup scan files
+                    for f in os.listdir(scan_dir):
+                        try:
+                            os.remove(os.path.join(scan_dir, f))
+                        except:
+                            pass
+                    try:
+                        os.rmdir(scan_dir)
+                    except:
+                        pass
                             
             except Exception as e:
                 self.console.print(f"[bold red]Error during client scanning: {str(e)}[/bold red]")
@@ -482,18 +492,22 @@ class DeauthTool:
         table.add_column("No.", style="cyan", justify="right")
         table.add_column("Client MAC", style="green")
         table.add_column("Device Type", style="blue")
+        table.add_column("Signal", justify="center")
         table.add_column("Last Seen", style="yellow")
 
         current_time = time.time()
         for idx, (mac, client) in enumerate(sorted(self.clients.items(), 
-                                                 key=lambda x: x[1]['last_seen'],
+                                                 key=lambda x: x[1]['signal'],
                                                  reverse=True), 1):
+            signal_bars = self.get_signal_strength_bars(client['signal'])
+            signal_str = f"{signal_bars} ({client['signal']} dBm)"
             last_seen = f"{int(current_time - client['last_seen'])}s ago"
             
             table.add_row(
                 str(idx),
                 mac,
                 client['type'],
+                signal_str,
                 last_seen
             )
 
