@@ -28,6 +28,7 @@ try:
     from rich.panel import Panel
     from rich.live import Live
     from rich.layout import Layout
+    from rich import box
 except ImportError:
     # These imports failed, but we'll handle it in check_dependencies()
     pass
@@ -225,7 +226,7 @@ class DeauthTool:
 
     def scan_networks(self):
         """Scan and let user select network"""
-        self.console.print("\n[bold cyan]📡 Scanning for networks...[/bold cyan]")
+        self.console.print("\n[bold cyan]📡 Scanning for WiFi Networks...[/bold cyan]")
         
         with Progress(
             SpinnerColumn(),
@@ -242,80 +243,119 @@ class DeauthTool:
                     if pkt.haslayer(Dot11Elt) and pkt[Dot11Elt].ID == 0:
                         ssid = pkt[Dot11Elt].info.decode('utf-8', errors='replace')
                     else:
-                        ssid = "Hidden SSID"
+                        ssid = "[Hidden]"
                     
+                    # Get signal strength
                     try:
                         signal_strength = pkt.dBm_AntSignal
                     except:
-                        signal_strength = "N/A"
-                    
-                    channel = None
-                    for element in pkt:
-                        if element.haslayer(Dot11Elt) and element[Dot11Elt].ID == 3:
-                            channel = ord(element[Dot11Elt].info)
-                            break
+                        signal_strength = -100  # Default value if not available
+                        
+                    # Get channel
+                    try:
+                        channel = int(ord(pkt[Dot11Elt:3].info))
+                    except:
+                        channel = "?"
+
+                    # Get encryption type
+                    encryption = self.get_encryption_type(pkt)
                     
                     if bssid not in self.networks:
                         self.networks[bssid] = {
                             'ssid': ssid,
                             'channel': channel,
                             'signal': signal_strength,
+                            'encryption': encryption,
                             'clients': set()
                         }
+                    else:
+                        # Update signal if better strength found
+                        if signal_strength > self.networks[bssid]['signal']:
+                            self.networks[bssid]['signal'] = signal_strength
             
+            # Sniff packets
             for i in range(30):
                 sniff(iface=self.interface, prn=packet_handler, timeout=1)
                 progress.update(scan_task, advance=1)
+
+        # Create and display networks table
+        table = Table(
+            title="[bold cyan]📶 Available WiFi Networks[/bold cyan]",
+            title_justify="left",
+            box=box.ROUNDED
+        )
         
-        networks_list = list(self.networks.items())
-        table = Table(title="Discovered Networks")
         table.add_column("No.", style="cyan", justify="right")
-        table.add_column("BSSID", style="green")
+        table.add_column("SSID", style="green")
+        table.add_column("BSSID", style="blue")
         table.add_column("Channel", justify="center")
-        table.add_column("Signal", justify="right")
-        table.add_column("SSID")
-        
-        for i, (bssid, info) in enumerate(networks_list, 1):
+        table.add_column("Signal", justify="center")
+        table.add_column("Security", style="yellow")
+        table.add_column("Clients", justify="center")
+
+        for idx, (bssid, network) in enumerate(sorted(self.networks.items(), 
+                                                     key=lambda x: x[1]['signal'], 
+                                                     reverse=True), 1):
+            signal_bars = self.get_signal_strength_bars(network['signal'])
             table.add_row(
-                str(i),
+                str(idx),
+                network['ssid'],
                 bssid,
-                str(info['channel']),
-                str(info['signal']),
-                info['ssid']
+                str(network['channel']),
+                f"{signal_bars} ({network['signal']} dBm)",
+                network['encryption'],
+                str(len(network['clients']))
             )
-        
+
         self.console.print(table)
-        self.console.print(f"\n[bold green]✓ Found {len(networks_list)} networks[/bold green]")
-        
+        self.console.print(f"\n[green]✓[/green] Found [bold cyan]{len(self.networks)}[/bold cyan] networks\n")
+
+        # Network selection
         while True:
             try:
-                choice = int(self.console.input("\n[bold cyan]Select network number: [/bold cyan]"))
-                if 1 <= choice <= len(networks_list):
-                    self.bssid = networks_list[choice-1][0]
+                choice = int(self.console.input("[bold cyan]Select network number: [/bold cyan]"))
+                if 1 <= choice <= len(self.networks):
+                    self.bssid = list(self.networks.keys())[choice-1]
+                    self.network_info = self.networks[self.bssid]
                     break
                 else:
                     self.console.print("[bold red]Invalid choice. Please try again.[/bold red]")
             except ValueError:
                 self.console.print("[bold red]Please enter a number.[/bold red]")
 
-    def get_device_info(self, mac):
-        """Try to get device information from MAC address"""
-        mac_prefix = mac[:8].upper()
-        try:
-            if mac_prefix.startswith(('AC:67:B2', '00:11:22')):
-                return '📱 Apple Device'
-            elif mac_prefix.startswith(('00:1A:11', '00:26:AB')):
-                return '🤖 Android Device'
-            elif mac_prefix.startswith(('00:1D:D8', '00:12:17')):
-                return '💻 Windows Device'
+    def get_encryption_type(self, pkt):
+        """Determine encryption type from packet"""
+        crypto = set()
+        
+        # Extract all Dot11Elt layers
+        p = pkt[Dot11Elt]
+        while isinstance(p, Dot11Elt):
+            if p.ID == 48:  # RSN
+                crypto.add("WPA2")
+            elif p.ID == 221 and p.info.startswith(b'\x00P\xf2\x01\x01\x00'):
+                crypto.add("WPA")
+            p = p.payload
+            
+        if not crypto:
+            if pkt.hasflag('privacy'):
+                crypto.add("WEP")
             else:
-                return '❓ Unknown Device'
-        except:
-            return '❓ Unknown Device'
+                crypto.add("OPEN")
+                
+        return '/'.join(sorted(crypto))
+
+    def get_signal_strength_bars(self, signal):
+        """Convert signal strength to visual bars"""
+        if signal >= -50: return "▂▄▆█"
+        elif signal >= -60: return "▂▄▆_"
+        elif signal >= -70: return "▂▄__"
+        elif signal >= -80: return "▂___"
+        else: return "____"
 
     def scan_clients(self):
-        """Scan and let user select client"""
-        self.console.print(f"\n[bold cyan]👥 Scanning for clients on network: {self.networks[self.bssid]['ssid']}[/bold cyan]")
+        """Scan for clients connected to selected network"""
+        ssid = self.network_info['ssid']
+        self.console.print(f"\n[bold cyan]👥 Scanning for clients on network: [green]{ssid}[/green][/bold cyan]")
         
         with Progress(
             SpinnerColumn(),
@@ -327,47 +367,102 @@ class DeauthTool:
             
             def packet_handler(pkt):
                 if pkt.haslayer(Dot11):
-                    if pkt.addr2 == self.bssid:
-                        if pkt.addr1 != "ff:ff:ff:ff:ff:ff":
-                            self.clients[pkt.addr1] = self.get_device_info(pkt.addr1)
-                    elif pkt.addr1 == self.bssid:
-                        if pkt.addr2 != "ff:ff:ff:ff:ff:ff":
-                            self.clients[pkt.addr2] = self.get_device_info(pkt.addr2)
+                    # Check if packet is to/from our target AP
+                    if pkt.addr1 == self.bssid or pkt.addr2 == self.bssid:
+                        # Get client MAC (the end that's not the AP)
+                        client_mac = pkt.addr1 if pkt.addr1 != self.bssid else pkt.addr2
+                        
+                        if client_mac != self.bssid:  # Ensure it's not the AP
+                            if client_mac not in self.clients:
+                                self.clients[client_mac] = {
+                                    'type': self.get_device_type(client_mac),
+                                    'signal': pkt.dBm_AntSignal if hasattr(pkt, 'dBm_AntSignal') else None,
+                                    'last_seen': time.time()
+                                }
+                            else:
+                                # Update last seen time
+                                self.clients[client_mac]['last_seen'] = time.time()
+                                # Update signal if available
+                                if hasattr(pkt, 'dBm_AntSignal'):
+                                    self.clients[client_mac]['signal'] = pkt.dBm_AntSignal
             
+            # Sniff packets
             for i in range(30):
                 sniff(iface=self.interface, prn=packet_handler, timeout=1)
                 progress.update(scan_task, advance=1)
+
+        # Create and display clients table
+        table = Table(
+            title="[bold cyan]📱 Connected Clients[/bold cyan]",
+            title_justify="left",
+            box=box.ROUNDED
+        )
         
-        if not self.clients:
-            self.console.print("[bold yellow]⚠️  No clients found[/bold yellow]")
-            return False
-            
-        clients_list = list(self.clients.items())
-        table = Table(title="Connected Clients")
         table.add_column("No.", style="cyan", justify="right")
         table.add_column("Client MAC", style="green")
-        table.add_column("Device Type")
-        
-        for i, (mac, info) in enumerate(clients_list, 1):
-            table.add_row(str(i), mac, info)
-        
+        table.add_column("Device Type", style="blue")
+        table.add_column("Signal", justify="center")
+        table.add_column("Last Seen", style="yellow")
+
+        current_time = time.time()
+        for idx, (mac, client) in enumerate(sorted(self.clients.items(), 
+                                                 key=lambda x: x[1]['last_seen'], 
+                                                 reverse=True), 1):
+            signal_str = f"{self.get_signal_strength_bars(client['signal'])} ({client['signal']} dBm)" if client['signal'] else "N/A"
+            last_seen = f"{int(current_time - client['last_seen'])}s ago"
+            
+            table.add_row(
+                str(idx),
+                mac,
+                client['type'],
+                signal_str,
+                last_seen
+            )
+
         self.console.print(table)
-        
+
+        # Client selection
         while True:
             try:
-                choice = int(self.console.input("\n[bold cyan]Select client number (0 for all clients): [/bold cyan]"))
-                if choice == 0:
+                choice = self.console.input("\n[bold cyan]Select client number (0 for all clients): [/bold cyan]")
+                if choice == "0":
                     self.client = None
                     break
-                elif 1 <= choice <= len(clients_list):
-                    self.client = clients_list[choice-1][0]
+                choice = int(choice)
+                if 1 <= choice <= len(self.clients):
+                    self.client = list(self.clients.keys())[choice-1]
                     break
                 else:
                     self.console.print("[bold red]Invalid choice. Please try again.[/bold red]")
             except ValueError:
                 self.console.print("[bold red]Please enter a number.[/bold red]")
+
+    def get_device_type(self, mac):
+        """Determine device type based on MAC address"""
+        mac = mac.lower()
+        # Add common device manufacturer prefixes
+        manufacturers = {
+            "apple": "📱 Apple Device",
+            "samsung": "📱 Samsung Device",
+            "google": "🤖 Google Device",
+            "intel": "💻 Intel Device",
+            "raspberry": "🔲 Raspberry Pi",
+            "microsoft": "💻 Microsoft Device",
+            "android": "📱 Android Device",
+            "huawei": "📱 Huawei Device",
+            "xiaomi": "📱 Xiaomi Device",
+        }
         
-        return True
+        try:
+            # You could use a MAC address lookup library here
+            # For now, we'll do a simple check
+            for prefix, device_type in manufacturers.items():
+                if prefix in mac:
+                    return device_type
+        except:
+            pass
+            
+        return "❓ Unknown Device"
 
     def perform_deauth(self):
         """Perform deauthentication attack"""
