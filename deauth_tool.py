@@ -259,16 +259,35 @@ class DeauthTool:
             scan_task = progress.add_task("[cyan]Running network discovery...", total=None)
             
             try:
-                # Run iwlist scan
-                cmd = f"iwlist {self.interface} scan"
-                output = subprocess.check_output(cmd.split(), stderr=subprocess.STDOUT).decode()
-                
+                # First try to bring the interface up
+                try:
+                    subprocess.run(['ip', 'link', 'set', self.interface, 'up'], 
+                                 stdout=subprocess.DEVNULL, 
+                                 stderr=subprocess.DEVNULL)
+                except:
+                    pass
+
+                # Run iw scan
+                try:
+                    cmd = f"iw dev {self.interface} scan"
+                    output = subprocess.check_output(cmd.split(), stderr=subprocess.STDOUT).decode()
+                except subprocess.CalledProcessError as e:
+                    if "Network is down" in str(e.output):
+                        self.console.print("[bold yellow]⚠️  Interface is down. Trying to bring it up...[/bold yellow]")
+                        subprocess.run(['ip', 'link', 'set', self.interface, 'up'], 
+                                    stdout=subprocess.DEVNULL, 
+                                    stderr=subprocess.DEVNULL)
+                        time.sleep(1)
+                        output = subprocess.check_output(cmd.split(), stderr=subprocess.STDOUT).decode()
+                    else:
+                        raise e
+
                 # Parse the output
                 current_cell = {}
                 for line in output.split('\n'):
                     line = line.strip()
                     
-                    if line.startswith('Cell '):
+                    if line.startswith('BSS '):
                         if current_cell and 'bssid' in current_cell:
                             self.networks[current_cell['bssid']] = {
                                 'ssid': current_cell.get('ssid', '[Hidden]'),
@@ -278,30 +297,38 @@ class DeauthTool:
                                 'clients': set()
                             }
                         current_cell = {}
-                        current_cell['bssid'] = line.split('Address: ')[1]
+                        current_cell['bssid'] = line.split('BSS ')[1].split('(')[0].strip()
                     
-                    elif line.startswith('Channel:'):
-                        current_cell['channel'] = line.split(':')[1].strip()
+                    elif 'freq: ' in line:
+                        # Convert frequency to channel
+                        try:
+                            freq = int(line.split('freq: ')[1])
+                            if 2412 <= freq <= 2484:
+                                channel = (freq - 2412) // 5 + 1
+                            elif 5170 <= freq <= 5825:
+                                channel = (freq - 5170) // 5 + 34
+                            else:
+                                channel = '?'
+                            current_cell['channel'] = str(channel)
+                        except:
+                            current_cell['channel'] = '?'
                     
-                    elif line.startswith('ESSID:'):
-                        ssid = line.split(':')[1].strip('"')
+                    elif 'SSID: ' in line:
+                        ssid = line.split('SSID: ')[1]
                         current_cell['ssid'] = ssid if ssid else '[Hidden]'
                     
-                    elif line.startswith('Quality'):
+                    elif 'signal: ' in line:
                         try:
-                            signal = line.split('Signal level=')[1].split(' ')[0]
-                            if signal.endswith('dBm'):
-                                current_cell['signal'] = int(signal[:-3])
-                            else:
-                                current_cell['signal'] = int(signal)
+                            signal = float(line.split('signal: ')[1].split(' ')[0])
+                            current_cell['signal'] = int(signal)
                         except:
                             current_cell['signal'] = -100
                     
-                    elif line.startswith('Encryption key:'):
-                        if 'on' in line.lower():
-                            if 'IE: WPA2' in output:
+                    elif 'capability: ' in line:
+                        if 'Privacy' in line:
+                            if 'RSN' in output:
                                 current_cell['encryption'] = 'WPA2'
-                            elif 'IE: WPA' in output:
+                            elif 'WPA' in output:
                                 current_cell['encryption'] = 'WPA'
                             else:
                                 current_cell['encryption'] = 'WEP'
@@ -320,6 +347,7 @@ class DeauthTool:
                             
             except Exception as e:
                 self.console.print(f"[bold red]Error during scanning: {str(e)}[/bold red]")
+                self.console.print("[bold yellow]⚠️  Make sure you have root privileges and the interface is in monitor mode.[/bold yellow]")
                 return False
 
         if not self.networks:
