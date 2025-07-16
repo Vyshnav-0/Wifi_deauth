@@ -303,7 +303,8 @@ class DeauthTool:
                                 continue
                                 
                     # Cleanup temporary files
-                    for f in glob.glob("/tmp/wifi_scan*"):
+                    temp_files = glob.glob("/tmp/wifi_scan*")
+                    for f in temp_files:
                         try:
                             os.remove(f)
                         except:
@@ -312,6 +313,10 @@ class DeauthTool:
             except Exception as e:
                 self.console.print(f"[bold red]Error during scanning: {str(e)}[/bold red]")
                 return False
+
+        if not self.networks:
+            self.console.print("[bold yellow]⚠️  No networks found. Make sure your wireless interface is working.[/bold yellow]")
+            return False
 
         # Create and display networks table
         table = Table(
@@ -343,10 +348,6 @@ class DeauthTool:
         self.console.print(table)
         self.console.print(f"\n[green]✓[/green] Found [bold cyan]{len(self.networks)}[/bold cyan] networks\n")
 
-        if not self.networks:
-            self.console.print("[bold yellow]⚠️  No networks found. Make sure your wireless interface is working.[/bold yellow]")
-            return False
-
         # Network selection
         while True:
             try:
@@ -354,13 +355,13 @@ class DeauthTool:
                 if 1 <= choice <= len(self.networks):
                     self.bssid = list(self.networks.keys())[choice-1]
                     self.network_info = self.networks[self.bssid]
-                    break
+                    return True
                 else:
                     self.console.print("[bold red]Invalid choice. Please try again.[/bold red]")
             except ValueError:
                 self.console.print("[bold red]Please enter a number.[/bold red]")
         
-        return True
+        return False
 
     def get_encryption_type(self, pkt):
         """Determine encryption type from packet"""
@@ -393,6 +394,10 @@ class DeauthTool:
 
     def scan_clients(self):
         """Scan for clients connected to selected network"""
+        if not self.network_info:
+            self.console.print("[bold red]❌ No network selected[/bold red]")
+            return False
+
         ssid = self.network_info['ssid']
         self.console.print(f"\n[bold cyan]👥 Scanning for clients on network: [green]{ssid}[/green][/bold cyan]")
         
@@ -443,7 +448,8 @@ class DeauthTool:
                                 continue
                                 
                     # Cleanup temporary files
-                    for f in glob.glob("/tmp/client_scan*"):
+                    temp_files = glob.glob("/tmp/client_scan*")
+                    for f in temp_files:
                         try:
                             os.remove(f)
                         except:
@@ -452,6 +458,10 @@ class DeauthTool:
             except Exception as e:
                 self.console.print(f"[bold red]Error during client scanning: {str(e)}[/bold red]")
                 return False
+
+        if not self.clients:
+            self.console.print("[bold yellow]⚠️  No clients found connected to this network.[/bold yellow]")
+            return False
 
         # Create and display clients table
         table = Table(
@@ -483,27 +493,23 @@ class DeauthTool:
 
         self.console.print(table)
 
-        if not self.clients:
-            self.console.print("[bold yellow]⚠️  No clients found connected to this network.[/bold yellow]")
-            return False
-
         # Client selection
         while True:
             try:
                 choice = self.console.input("\n[bold cyan]Select client number (0 for all clients): [/bold cyan]")
                 if choice == "0":
                     self.client = None
-                    break
+                    return True
                 choice = int(choice)
                 if 1 <= choice <= len(self.clients):
                     self.client = list(self.clients.keys())[choice-1]
-                    break
+                    return True
                 else:
                     self.console.print("[bold red]Invalid choice. Please try again.[/bold red]")
             except ValueError:
                 self.console.print("[bold red]Please enter a number.[/bold red]")
         
-        return True
+        return False
 
     def get_device_type(self, mac):
         """Determine device type based on MAC address"""
