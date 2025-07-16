@@ -16,6 +16,7 @@ import subprocess
 import venv
 from pathlib import Path
 from datetime import datetime
+import glob
 
 # Import all required packages at module level
 try:
@@ -234,49 +235,61 @@ class DeauthTool:
             BarColumn(),
             TimeElapsedColumn(),
         ) as progress:
-            scan_task = progress.add_task("[cyan]Scanning...", total=30)
+            scan_task = progress.add_task("[cyan]Running network discovery...", total=None)
             
-            def packet_handler(pkt):
-                if pkt.haslayer(Dot11Beacon):
-                    bssid = pkt[Dot11].addr2
+            try:
+                # Run airodump-ng to scan for networks
+                cmd = f"airodump-ng {self.interface} --output-format csv --write /tmp/wifi_scan --write-interval 1"
+                process = subprocess.Popen(cmd.split(), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                
+                # Let it run for 10 seconds
+                time.sleep(10)
+                process.terminate()
+                
+                # Read the CSV file
+                csv_file = "/tmp/wifi_scan-01.csv"
+                if os.path.exists(csv_file):
+                    with open(csv_file, 'r') as f:
+                        lines = f.readlines()
                     
-                    if pkt.haslayer(Dot11Elt) and pkt[Dot11Elt].ID == 0:
-                        ssid = pkt[Dot11Elt].info.decode('utf-8', errors='replace')
-                    else:
-                        ssid = "[Hidden]"
-                    
-                    # Get signal strength
-                    try:
-                        signal_strength = pkt.dBm_AntSignal
-                    except:
-                        signal_strength = -100  # Default value if not available
-                        
-                    # Get channel
-                    try:
-                        channel = int(ord(pkt[Dot11Elt:3].info))
-                    except:
-                        channel = "?"
-
-                    # Get encryption type
-                    encryption = self.get_encryption_type(pkt)
-                    
-                    if bssid not in self.networks:
-                        self.networks[bssid] = {
-                            'ssid': ssid,
-                            'channel': channel,
-                            'signal': signal_strength,
-                            'encryption': encryption,
-                            'clients': set()
-                        }
-                    else:
-                        # Update signal if better strength found
-                        if signal_strength > self.networks[bssid]['signal']:
-                            self.networks[bssid]['signal'] = signal_strength
-            
-            # Sniff packets
-            for i in range(30):
-                sniff(iface=self.interface, prn=packet_handler, timeout=1)
-                progress.update(scan_task, advance=1)
+                    # Parse networks
+                    networks_section = True
+                    for line in lines:
+                        line = line.strip()
+                        if line == "":
+                            networks_section = False
+                            continue
+                            
+                        if networks_section and "BSSID" not in line:
+                            try:
+                                parts = line.split(',')
+                                bssid = parts[0].strip()
+                                channel = parts[3].strip()
+                                signal = parts[8].strip()
+                                encryption = parts[5].strip()
+                                ssid = parts[13].strip()
+                                
+                                if bssid and bssid != "BSSID":
+                                    self.networks[bssid] = {
+                                        'ssid': ssid if ssid else "[Hidden]",
+                                        'channel': channel,
+                                        'signal': int(signal) if signal.isdigit() else -100,
+                                        'encryption': encryption,
+                                        'clients': set()
+                                    }
+                            except:
+                                continue
+                                
+                    # Cleanup temporary files
+                    for f in glob.glob("/tmp/wifi_scan*"):
+                        try:
+                            os.remove(f)
+                        except:
+                            pass
+                            
+            except Exception as e:
+                self.console.print(f"[bold red]Error during scanning: {str(e)}[/bold red]")
+                return False
 
         # Create and display networks table
         table = Table(
@@ -291,7 +304,6 @@ class DeauthTool:
         table.add_column("Channel", justify="center")
         table.add_column("Signal", justify="center")
         table.add_column("Security", style="yellow")
-        table.add_column("Clients", justify="center")
 
         for idx, (bssid, network) in enumerate(sorted(self.networks.items(), 
                                                      key=lambda x: x[1]['signal'], 
@@ -303,12 +315,15 @@ class DeauthTool:
                 bssid,
                 str(network['channel']),
                 f"{signal_bars} ({network['signal']} dBm)",
-                network['encryption'],
-                str(len(network['clients']))
+                network['encryption']
             )
 
         self.console.print(table)
         self.console.print(f"\n[green]✓[/green] Found [bold cyan]{len(self.networks)}[/bold cyan] networks\n")
+
+        if not self.networks:
+            self.console.print("[bold yellow]⚠️  No networks found. Make sure your wireless interface is working.[/bold yellow]")
+            return False
 
         # Network selection
         while True:
@@ -322,6 +337,8 @@ class DeauthTool:
                     self.console.print("[bold red]Invalid choice. Please try again.[/bold red]")
             except ValueError:
                 self.console.print("[bold red]Please enter a number.[/bold red]")
+        
+        return True
 
     def get_encryption_type(self, pkt):
         """Determine encryption type from packet"""
@@ -363,33 +380,56 @@ class DeauthTool:
             BarColumn(),
             TimeElapsedColumn(),
         ) as progress:
-            scan_task = progress.add_task("[cyan]Scanning for clients...", total=30)
+            scan_task = progress.add_task("[cyan]Scanning for clients...", total=None)
             
-            def packet_handler(pkt):
-                if pkt.haslayer(Dot11):
-                    # Check if packet is to/from our target AP
-                    if pkt.addr1 == self.bssid or pkt.addr2 == self.bssid:
-                        # Get client MAC (the end that's not the AP)
-                        client_mac = pkt.addr1 if pkt.addr1 != self.bssid else pkt.addr2
-                        
-                        if client_mac != self.bssid:  # Ensure it's not the AP
-                            if client_mac not in self.clients:
-                                self.clients[client_mac] = {
-                                    'type': self.get_device_type(client_mac),
-                                    'signal': pkt.dBm_AntSignal if hasattr(pkt, 'dBm_AntSignal') else None,
-                                    'last_seen': time.time()
-                                }
-                            else:
-                                # Update last seen time
-                                self.clients[client_mac]['last_seen'] = time.time()
-                                # Update signal if available
-                                if hasattr(pkt, 'dBm_AntSignal'):
-                                    self.clients[client_mac]['signal'] = pkt.dBm_AntSignal
-            
-            # Sniff packets
-            for i in range(30):
-                sniff(iface=self.interface, prn=packet_handler, timeout=1)
-                progress.update(scan_task, advance=1)
+            try:
+                # Run airodump-ng focused on target network
+                cmd = f"airodump-ng {self.interface} --bssid {self.bssid} --channel {self.network_info['channel']} --output-format csv --write /tmp/client_scan --write-interval 1"
+                process = subprocess.Popen(cmd.split(), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                
+                # Let it run for 15 seconds
+                time.sleep(15)
+                process.terminate()
+                
+                # Read the CSV file
+                csv_file = "/tmp/client_scan-01.csv"
+                if os.path.exists(csv_file):
+                    with open(csv_file, 'r') as f:
+                        lines = f.readlines()
+                    
+                    # Parse clients
+                    clients_section = False
+                    for line in lines:
+                        line = line.strip()
+                        if "Station MAC" in line:
+                            clients_section = True
+                            continue
+                            
+                        if clients_section and line:
+                            try:
+                                parts = line.split(',')
+                                client_mac = parts[0].strip()
+                                
+                                if client_mac and client_mac != "Station MAC":
+                                    signal = parts[3].strip()
+                                    self.clients[client_mac] = {
+                                        'type': self.get_device_type(client_mac),
+                                        'signal': int(signal) if signal.isdigit() else None,
+                                        'last_seen': time.time()
+                                    }
+                            except:
+                                continue
+                                
+                    # Cleanup temporary files
+                    for f in glob.glob("/tmp/client_scan*"):
+                        try:
+                            os.remove(f)
+                        except:
+                            pass
+                            
+            except Exception as e:
+                self.console.print(f"[bold red]Error during client scanning: {str(e)}[/bold red]")
+                return False
 
         # Create and display clients table
         table = Table(
@@ -406,9 +446,9 @@ class DeauthTool:
 
         current_time = time.time()
         for idx, (mac, client) in enumerate(sorted(self.clients.items(), 
-                                                 key=lambda x: x[1]['last_seen'], 
+                                                 key=lambda x: x[1]['signal'] if x[1]['signal'] is not None else -100, 
                                                  reverse=True), 1):
-            signal_str = f"{self.get_signal_strength_bars(client['signal'])} ({client['signal']} dBm)" if client['signal'] else "N/A"
+            signal_str = f"{self.get_signal_strength_bars(client['signal'])} ({client['signal']} dBm)" if client['signal'] is not None else "N/A"
             last_seen = f"{int(current_time - client['last_seen'])}s ago"
             
             table.add_row(
@@ -420,6 +460,10 @@ class DeauthTool:
             )
 
         self.console.print(table)
+
+        if not self.clients:
+            self.console.print("[bold yellow]⚠️  No clients found connected to this network.[/bold yellow]")
+            return False
 
         # Client selection
         while True:
@@ -436,6 +480,8 @@ class DeauthTool:
                     self.console.print("[bold red]Invalid choice. Please try again.[/bold red]")
             except ValueError:
                 self.console.print("[bold red]Please enter a number.[/bold red]")
+        
+        return True
 
     def get_device_type(self, mac):
         """Determine device type based on MAC address"""
